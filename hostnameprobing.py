@@ -121,7 +121,7 @@ if __name__ == "__main__":
             os._exit(0)
         
         # 写入日志
-        logger.info(f"\n# Begin at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        logger.info(f"\n# Begin at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         
         # 多线程扫描
         with futures.ThreadPoolExecutor(max_workers=THREADS) as executor:
