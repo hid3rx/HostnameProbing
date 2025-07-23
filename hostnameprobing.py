@@ -1,6 +1,6 @@
 # coding=utf-8
 
-# python -m pip install lxml
+# python -m pip install requests, chardet, lxml
 
 import requests, urllib3, argparse, traceback, time, os, threading, logging
 from requests.exceptions import ConnectTimeout, ConnectionError, ReadTimeout
@@ -62,7 +62,8 @@ def run(address, hostname):
     try:
         response = requests.get(address, verify=False, headers=headers, 
             allow_redirects=False, timeout=5, proxies=PROXIES if USE_PROXY else None)
-        html = etree.HTML(response.text)
+        charset = chardet.detect(response.content)
+        html = etree.HTML(response.content.decode(charset['encoding']))
         title = []
         if html is not None:
             title = html.xpath('//title/text()')
