@@ -1,74 +1,96 @@
 # coding=utf-8
 
-# python -m pip install requests, chardet, lxml
-
-import requests, urllib3, argparse, traceback, time, os, threading, logging
-from requests.exceptions import ConnectTimeout, ConnectionError, ReadTimeout
+import argparse, chardet, logging, os, random, requests, traceback, time, threading, urllib3
 from concurrent import futures
 from datetime import datetime
 from lxml import etree
+from requests.exceptions import ConnectTimeout, ConnectionError, ReadTimeout
 
 # 禁用https警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# 日志设置
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-
-fh = logging.FileHandler('log.txt')
-fh.setFormatter(logging.Formatter('%(message)s'))
-logger.addHandler(fh)
-
-ch = logging.StreamHandler()
-ch.setFormatter(logging.Formatter('%(message)s'))
-logger.addHandler(ch)
 
 #
 # =================== [ 全局设置 ] ===================
 #
 
-# 线程并发数
-THREADS = 5
+configs = \
+{
+    # 超时时间，单位秒
+    "timeout": 10,
 
-# 每个线程发起登录后暂停时长，单位秒
-DELAY = 1
+    # 线程并发数
+    "threads": 10,
+    
+    # 每个线程发起请求后暂停时长，单位秒
+    "delay": 1,
 
-# 是否使用代理
-USE_PROXY = False
+    # 扫描日志
+    "logfile": "log.txt",
 
-# 设置代理
-PROXIES = {
-    "http": "http://127.0.0.1:8083",
-    "https": "http://127.0.0.1:8083"
+    # 是否使用代理
+    "use_proxy": False,
+
+    # 设置代理
+    "proxies": {
+        "http": "http://127.0.0.1:8080",
+        "https": "http://127.0.0.1:8080"
+    },
+
+    # 自定义headers
+    "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/114.0",
+        "Connection": "close",
+    }
 }
+
+# 互斥锁
+locks = {
+    "log": threading.Lock()
+}
+
+#
+# =================== [ 功能函数 ] ===================
+#
+
+# 日志输出
+def log(message: str):
+    with locks["log"]:
+        print(message)
+        with open(configs["logfile"], "a", encoding="utf-8") as fout:
+            fout.write(message + "\n")
 
 #
 # =================== [ 扫描函数 ] ===================
 #
 
 def run(address, hostname):
-    time.sleep(DELAY)
+    time.sleep(configs["delay"])
 
     headers = requests.utils.default_headers()
+    headers.update(configs["headers"])
+    random_ip = ".".join(str(random.randint(0,255)) for _ in range(4))
     headers.update({
-        "Host": hostname,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/114.0",
-        "Connection": "close",
+        "X-Forwarded-For": random_ip,
+        "X-Originating-IP": random_ip,
+        "X-Remote-IP": random_ip,
+        "X-Remote-Addr": random_ip,
+        "X-Real-IP": random_ip
     })
+    proxies = configs["proxies"] if configs["use_proxy"] else None
 
     if not address.startswith("http://") and not address.startswith("https://"):
         address = "http://" + address
 
     try:
-        response = requests.get(address, verify=False, headers=headers, 
-            allow_redirects=False, timeout=5, proxies=PROXIES if USE_PROXY else None)
+        response = requests.get(address, verify=False, headers=headers, allow_redirects=False, timeout=configs["timeout"], proxies=proxies)
         charset = chardet.detect(response.content)
-        html = etree.HTML(response.content.decode(charset['encoding']))
+        charset = charset['encoding'] if charset['encoding'] else "utf-8"
+        html = etree.HTML(response.content.decode(charset))
         title = []
         if html is not None:
             title = html.xpath('//title/text()')
         title = title[0] if title else "NULL"
-        logger.info("hostname:{0:<20}\t\taddress:{1:<20}\tcode:{2:<3}\tlen:{3:<5}\ttitle:{4}".format(hostname, address, response.status_code, len(response.content), title))
+        log("hostname:{0:<20}\t\taddress:{1:<20}\tcode:{2:<3}\tlen:{3:<5}\ttitle:{4}".format(hostname, address, response.status_code, len(response.content), title))
     except (ConnectTimeout, ConnectionError, ReadTimeout) as e:
         print(f"[x] address:{address}\t{hostname}\tConnect error")
     except Exception as e:
@@ -79,25 +101,19 @@ def run(address, hostname):
 # =================== [ 启动多线程扫描 ] ===================
 #
 
-TASKS = set()
-
 # 并发运行爆破函数
-def concurrent_run(executor, addresses: list, hostnames: list):
-    global TASKS
+def concurrent_run(executor, tasks, addresses: list, hostnames: list):
     for address in addresses:
-        address = address.rstrip()
         if not address:
             continue
         for hostname in hostnames:
-            hostname = hostname.rstrip()
             if not hostname:
                 continue
             # 如果队列过长就等待
-            if len(TASKS) >= THREADS:
-                _, TASKS = futures.wait(TASKS, return_when=futures.FIRST_COMPLETED)
+            if len(tasks) >= configs["threads"]:
+                _, tasks = futures.wait(tasks, return_when=futures.FIRST_COMPLETED)
             # 新建线程
-            t = executor.submit(run, address, hostname)
-            TASKS.add(t)
+            tasks.add(executor.submit(run, address, hostname))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Hostname probing tool')
@@ -106,32 +122,43 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.addresses and args.hostnames:
         # 读取地址列表
+        addresses = []
         try:
-            with open(args.addresses, "r", encoding="utf-8") as f:
-                addresses = f.readlines()
+            with open(args.addresses, "r", encoding="utf-8") as fin:
+                for line in fin:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    addresses.append(line)
         except Exception as e:
             print(f"[x] Cannot open '{args.addresses}' file {e}")
             os._exit(0)
 
         # 读取域名列表
+        hostnames = []
         try:
-            with open(args.hostnames, "r", encoding="utf-8") as f:
-                hostnames = f.readlines()
+            with open(args.hostnames, "r", encoding="utf-8") as fin:
+                for line in fin:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    hostnames.append(line)
         except Exception as e:
             print(f"[x] Cannot open '{args.hostnames}' file {e}")
             os._exit(0)
         
         # 写入日志
-        logger.info(f"\n# Begin at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        
+        log(f"\n# Begin at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+
         # 多线程扫描
-        with futures.ThreadPoolExecutor(max_workers=THREADS) as executor:
+        tasks = set()
+        with futures.ThreadPoolExecutor(max_workers=configs["threads"]) as executor:
             try:
-                concurrent_run(executor, addresses, hostnames)
+                concurrent_run(executor, tasks, addresses, hostnames)
                 print("[!] Wait for all threads exit.")
-                futures.wait(TASKS, return_when=futures.ALL_COMPLETED)
+                futures.wait(tasks, return_when=futures.ALL_COMPLETED)
             except KeyboardInterrupt:
                 print("[!] Get Ctrl-C, wait for all threads exit.")
-                futures.wait(TASKS, return_when=futures.ALL_COMPLETED)
+                futures.wait(tasks, return_when=futures.ALL_COMPLETED)
     else:
         parser.print_help()
