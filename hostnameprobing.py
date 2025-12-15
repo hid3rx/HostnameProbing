@@ -90,7 +90,7 @@ def run(address, hostname):
         if html is not None:
             title = html.xpath('//title/text()')
         title = title[0] if title else "NULL"
-        log("hostname:{0:<20}\t\taddress:{1:<20}\tcode:{2:<3}\tlen:{3:<5}\ttitle:{4}".format(hostname, address, response.status_code, len(response.content), title))
+        log("hostname:{0:<50}\t\taddress:{1:<30}\tcode:{2:<3}\tlen:{3:<5}\ttitle:{4}".format(hostname, address, response.status_code, len(response.content), title))
     except (ConnectTimeout, ConnectionError, ReadTimeout) as e:
         print(f"[x] address:{address}\t{hostname}\tConnect error")
     except Exception as e:
