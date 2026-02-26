@@ -70,6 +70,7 @@ def run(address, hostname):
     headers.update(configs["headers"])
     random_ip = ".".join(str(random.randint(0,255)) for _ in range(4))
     headers.update({
+        "Host": hostname,
         "X-Forwarded-For": random_ip,
         "X-Originating-IP": random_ip,
         "X-Remote-IP": random_ip,
